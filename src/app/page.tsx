@@ -56,6 +56,7 @@ export default function Dashboard() {
     // If pre-buffered Neural HD Audio is ready, play studio quality audio instantly!
     if (preloadedAudio) {
       preloadedAudio.currentTime = 0;
+      preloadedAudio.playbackRate = 1.12; // Faster, natural audio playback without slow pauses
       setCounselorState('speaking');
 
       preloadedAudio.onended = () => setCounselorState('idle');
@@ -78,7 +79,7 @@ export default function Dashboard() {
         try { window.speechSynthesis.cancel(); } catch (_) {}
         const cleanText = introText.replace(/[*#_`~]/g, '').replace(/\s+/g, ' ').trim();
         const utterance = new SpeechSynthesisUtterance(cleanText);
-        utterance.rate = 0.92;
+        utterance.rate = 1.10; // Faster speech pace for dynamic natural interaction
         utterance.pitch = 1.02;
         utterance.lang = 'hi-IN';
 
@@ -171,7 +172,7 @@ export default function Dashboard() {
 
       const chunkText = chunks[currentChunkIndex];
       const utterance = new SpeechSynthesisUtterance(chunkText);
-      utterance.rate = 0.92; // Slightly natural pace for clarity
+      utterance.rate = 1.10; // Faster natural speed
       utterance.pitch = 1.02; // Warm tone
       utterance.lang = 'hi-IN';
 
@@ -272,7 +273,7 @@ export default function Dashboard() {
             {/* Left: Counselor Avatar Image Preview */}
             <div className="relative w-full md:w-1/2 min-h-[340px] md:min-h-[440px] bg-slate-900 overflow-hidden flex items-center justify-center">
               <img
-                src="/ai_councleor.png"
+                src="/ai_councler.png"
                 alt="Priya Sharma - Senior AI Career Counselor"
                 className="w-full h-full object-cover object-center filter brightness-105"
               />

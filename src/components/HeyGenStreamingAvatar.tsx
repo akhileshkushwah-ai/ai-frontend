@@ -21,7 +21,11 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
   onEndSession,
   studentName,
 }) => {
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRefA = useRef<HTMLVideoElement>(null);
+  const videoRefB = useRef<HTMLVideoElement>(null);
+  const [activeVideo, setActiveVideo] = useState<'A' | 'B'>('A');
+  const isSwitchingRef = useRef(false);
+
   const [inputText, setInputText] = useState('');
   const [heyGenKey, setHeyGenKey] = useState('');
   const [isKeySaved, setIsKeySaved] = useState(false);
@@ -57,24 +61,87 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
 
   const counselorState = isLiveWsConnected && liveState !== 'idle' ? liveState : propsState;
 
-  // Video playback logic for ai_live_counc.mp4
+  // Dual-Video Ping-Pong Crossfade Playback Controller
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
+    const vidA = videoRefA.current;
+    const vidB = videoRefB.current;
+    if (!vidA || !vidB) return;
 
     if (counselorState === 'speaking') {
-      const playPromise = video.play();
+      const currentVid = activeVideo === 'A' ? vidA : vidB;
+      const playPromise = currentVid.play();
       if (playPromise !== undefined) {
-        playPromise.catch(error => {
+        playPromise.catch((error) => {
           if (error.name !== 'AbortError') {
             console.error('Video play error:', error);
           }
         });
       }
     } else {
-      video.pause();
-      video.currentTime = 0;
+      vidA.pause();
+      vidA.currentTime = 0;
+      vidB.pause();
+      vidB.currentTime = 0;
+      setActiveVideo('A');
+      isSwitchingRef.current = false;
     }
+  }, [counselorState, activeVideo]);
+
+  // Seamless Zero-Blink Ping-Pong TimeUpdate Switcher
+  useEffect(() => {
+    const vidA = videoRefA.current;
+    const vidB = videoRefB.current;
+    if (!vidA || !vidB) return;
+
+    const handleTimeUpdate = (e: Event) => {
+      if (counselorState !== 'speaking' || isSwitchingRef.current) return;
+      const target = e.target as HTMLVideoElement;
+      const threshold = target.duration && !isNaN(target.duration) ? Math.max(0, target.duration - 0.4) : 9.5;
+
+      if (target.currentTime >= threshold) {
+        isSwitchingRef.current = true;
+        const nextVid = target === vidA ? vidB : vidA;
+        const nextMode = target === vidA ? 'B' : 'A';
+
+        nextVid.currentTime = 0;
+        const playPromise = nextVid.play();
+
+        const doSwitch = () => {
+          setActiveVideo(nextMode);
+          setTimeout(() => {
+            isSwitchingRef.current = false;
+          }, 400);
+        };
+
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => {
+              if (nextVid.readyState >= 3) {
+                doSwitch();
+              } else {
+                const onPlaying = () => {
+                  nextVid.removeEventListener('playing', onPlaying);
+                  doSwitch();
+                };
+                nextVid.addEventListener('playing', onPlaying);
+              }
+            })
+            .catch(() => {
+              isSwitchingRef.current = false;
+            });
+        } else {
+          doSwitch();
+        }
+      }
+    };
+
+    vidA.addEventListener('timeupdate', handleTimeUpdate);
+    vidB.addEventListener('timeupdate', handleTimeUpdate);
+
+    return () => {
+      vidA.removeEventListener('timeupdate', handleTimeUpdate);
+      vidB.removeEventListener('timeupdate', handleTimeUpdate);
+    };
   }, [counselorState]);
 
   // Real-time audio spectrum & lip-sync frequency calculation
@@ -90,7 +157,6 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
 
     const computeVisemeLipsync = () => {
       clock += 0.18;
-      // Synthesize multi-harmonic speech visemes (open/close + wide vowels)
       const openAmount = Math.max(0.2, Math.sin(clock * 6) * 0.7 + Math.cos(clock * 11) * 0.4);
       const widthAmount = Math.max(0.1, Math.cos(clock * 4) * 0.3);
 
@@ -113,8 +179,6 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
       interruptAi();
     }
 
-    // Keep the typed message inside the live voice session when it is running,
-    // otherwise the counselor would answer twice (live audio + REST TTS).
     if (isLiveWsConnected) {
       setLiveError(null);
       sendLiveText(message);
@@ -152,20 +216,38 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
             : 'scale-100'
         }`}>
           <img
-            src="/ai_councleor.png"
+            src="/ai_councler.png"
             alt="Priya Sharma - Senior AI Career Counselor"
-            className={`absolute inset-0 w-full h-full object-cover object-center transition-opacity duration-300 ${
+            className={`absolute inset-0 z-0 w-full h-full object-cover object-center transition-opacity duration-300 ${
               counselorState === 'speaking' ? 'opacity-0' : 'opacity-100'
             }`}
           />
           <video
-            ref={videoRef}
-            src="/ai_councleor_video.mp4"
-            loop
+            ref={videoRefA}
+            src="/ai_councloer.mp4"
             muted
             playsInline
+            preload="auto"
             className={`absolute inset-0 w-full h-full object-cover object-center transition-opacity duration-300 ${
-              counselorState === 'speaking' ? 'opacity-100' : 'opacity-0'
+              activeVideo === 'A'
+                ? 'z-20 opacity-100'
+                : counselorState === 'speaking'
+                ? 'z-10 opacity-100'
+                : 'z-0 opacity-0'
+            }`}
+          />
+          <video
+            ref={videoRefB}
+            src="/ai_councloer.mp4"
+            muted
+            playsInline
+            preload="auto"
+            className={`absolute inset-0 w-full h-full object-cover object-center transition-opacity duration-300 ${
+              activeVideo === 'B'
+                ? 'z-20 opacity-100'
+                : counselorState === 'speaking'
+                ? 'z-10 opacity-100'
+                : 'z-0 opacity-0'
             }`}
           />
 

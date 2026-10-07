@@ -31,7 +31,10 @@ export const HumanCounselorRoom: React.FC<HumanCounselorRoomProps> = ({
 }) => {
   const [inputText, setInputText] = useState('');
   const [mouthOpen, setMouthOpen] = useState(0);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRefA = useRef<HTMLVideoElement>(null);
+  const videoRefB = useRef<HTMLVideoElement>(null);
+  const [activeVideo, setActiveVideo] = useState<'A' | 'B'>('A');
+  const isSwitchingRef = useRef(false);
 
   // Real-time Gemini Multimodal Live Voice-to-Voice Hook
   const {
@@ -46,13 +49,15 @@ export const HumanCounselorRoom: React.FC<HumanCounselorRoomProps> = ({
   const counselorState = isLiveWsConnected ? liveState : propsState;
   const lastMessage = messages[messages.length - 1];
 
-  // Video playback logic for ai_live_counc.mp4
+  // Dual-Video Ping-Pong Crossfade Playback Controller
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
+    const vidA = videoRefA.current;
+    const vidB = videoRefB.current;
+    if (!vidA || !vidB) return;
 
     if (counselorState === 'speaking') {
-      const playPromise = video.play();
+      const currentVid = activeVideo === 'A' ? vidA : vidB;
+      const playPromise = currentVid.play();
       if (playPromise !== undefined) {
         playPromise.catch((error: any) => {
           if (error.name !== 'AbortError') {
@@ -61,9 +66,70 @@ export const HumanCounselorRoom: React.FC<HumanCounselorRoomProps> = ({
         });
       }
     } else {
-      video.pause();
-      video.currentTime = 0;
+      vidA.pause();
+      vidA.currentTime = 0;
+      vidB.pause();
+      vidB.currentTime = 0;
+      setActiveVideo('A');
+      isSwitchingRef.current = false;
     }
+  }, [counselorState, activeVideo]);
+
+  // Seamless Zero-Blink Ping-Pong TimeUpdate Switcher
+  useEffect(() => {
+    const vidA = videoRefA.current;
+    const vidB = videoRefB.current;
+    if (!vidA || !vidB) return;
+
+    const handleTimeUpdate = (e: Event) => {
+      if (counselorState !== 'speaking' || isSwitchingRef.current) return;
+      const target = e.target as HTMLVideoElement;
+      const threshold = target.duration && !isNaN(target.duration) ? Math.max(0, target.duration - 0.4) : 9.5;
+
+      if (target.currentTime >= threshold) {
+        isSwitchingRef.current = true;
+        const nextVid = target === vidA ? vidB : vidA;
+        const nextMode = target === vidA ? 'B' : 'A';
+
+        nextVid.currentTime = 0;
+        const playPromise = nextVid.play();
+
+        const doSwitch = () => {
+          setActiveVideo(nextMode);
+          setTimeout(() => {
+            isSwitchingRef.current = false;
+          }, 400);
+        };
+
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => {
+              if (nextVid.readyState >= 3) {
+                doSwitch();
+              } else {
+                const onPlaying = () => {
+                  nextVid.removeEventListener('playing', onPlaying);
+                  doSwitch();
+                };
+                nextVid.addEventListener('playing', onPlaying);
+              }
+            })
+            .catch(() => {
+              isSwitchingRef.current = false;
+            });
+        } else {
+          doSwitch();
+        }
+      }
+    };
+
+    vidA.addEventListener('timeupdate', handleTimeUpdate);
+    vidB.addEventListener('timeupdate', handleTimeUpdate);
+
+    return () => {
+      vidA.removeEventListener('timeupdate', handleTimeUpdate);
+      vidB.removeEventListener('timeupdate', handleTimeUpdate);
+    };
   }, [counselorState]);
 
   // Real-time lip sync animation
@@ -126,19 +192,39 @@ export const HumanCounselorRoom: React.FC<HumanCounselorRoomProps> = ({
           }`}
         >
           <Image
-            src="/ai_councleor.png"
+            src="/ai_councler.png"
             alt="Priya Sharma - Live Human AI Career Counselor"
             fill
-            className={`object-cover object-center filter brightness-100 contrast-105 transition-opacity duration-300 ${counselorState === 'speaking' ? 'opacity-0' : 'opacity-100'}`}
+            className={`object-cover object-center filter brightness-100 contrast-105 transition-opacity duration-300 z-0 ${counselorState === 'speaking' ? 'opacity-0' : 'opacity-100'}`}
             priority
           />
           <video
-            ref={videoRef}
-            src="/ai_councleor_video.mp4"
-            loop
+            ref={videoRefA}
+            src="/ai_councloer.mp4"
             muted
             playsInline
-            className={`absolute inset-0 w-full h-full object-cover object-center filter brightness-100 contrast-105 transition-opacity duration-300 ${counselorState === 'speaking' ? 'opacity-100' : 'opacity-0'}`}
+            preload="auto"
+            className={`absolute inset-0 w-full h-full object-cover object-center filter brightness-100 contrast-105 transition-opacity duration-300 ${
+              activeVideo === 'A'
+                ? 'z-20 opacity-100'
+                : counselorState === 'speaking'
+                ? 'z-10 opacity-100'
+                : 'z-0 opacity-0'
+            }`}
+          />
+          <video
+            ref={videoRefB}
+            src="/ai_councloer.mp4"
+            muted
+            playsInline
+            preload="auto"
+            className={`absolute inset-0 w-full h-full object-cover object-center filter brightness-100 contrast-105 transition-opacity duration-300 ${
+              activeVideo === 'B'
+                ? 'z-20 opacity-100'
+                : counselorState === 'speaking'
+                ? 'z-10 opacity-100'
+                : 'z-0 opacity-0'
+            }`}
           />
 
 
