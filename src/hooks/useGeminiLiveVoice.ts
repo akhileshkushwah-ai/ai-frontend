@@ -391,6 +391,12 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
     [safeSend, updateState],
   );
 
+  // Trigger Official SABCQ Grand Opening Introduction on first mic tap
+  const triggerFirstIntro = useCallback(() => {
+    updateState('thinking');
+    return safeSend({ event: 'trigger_first_intro' });
+  }, [safeSend, updateState]);
+
   // Cleanup on unmount only. Deps are all stable callbacks, so this effect
   // runs once instead of tearing the session down on every render.
   useEffect(() => {
@@ -411,5 +417,6 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
     stopMicStream,
     interruptAi,
     sendLiveText,
+    triggerFirstIntro,
   };
 }

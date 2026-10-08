@@ -32,14 +32,8 @@ export default function Dashboard() {
           setSessionId(data.sessionId);
           const name = data.reportLoaded?.studentName || 'Aman Verma';
           setStudentName(name);
-          const welcomeText = `Namaste ${name}! Main Priya Sharma, aapki SABCQ Career Counselor hoon. Aapki  report mere paas hai. Aap bina kisi jhijhak ke mujhse apne career options ke baare mein baat kar sakte hain!`;
+          const welcomeText = `Namaste ${name}! Main Priya Sharma, aapki SABCQ Career Counselor hoon. Aapki report mere paas hai. Aap bina kisi jhijhak ke mujhse apne career options ke baare mein baat kar sakte hain!`;
           setLastResponseText(welcomeText);
-
-          // Pre-buffer Studio Neural HD Audio MP3 in browser memory
-          const ttsUrl = `${API_BASE_URL}/tts?text=${encodeURIComponent(welcomeText)}`;
-          const audio = new Audio(ttsUrl);
-          audio.preload = 'auto';
-          setPreloadedAudio(audio);
         }
       })
       .catch((err) => console.warn('Pre-fetch session context:', err));
@@ -51,48 +45,14 @@ export default function Dashboard() {
     };
   }, []);
 
-  // Direct user-gesture instant 0ms session start action
+  // Direct user-gesture silent session start action (no auto-playing sound on start)
   const startCounselorSession = () => {
-    // If pre-buffered Neural HD Audio is ready, play studio quality audio instantly!
-    if (preloadedAudio) {
-      preloadedAudio.currentTime = 0;
-      preloadedAudio.playbackRate = 1.12; // Faster, natural audio playback without slow pauses
-      setCounselorState('speaking');
-
-      preloadedAudio.onended = () => setCounselorState('idle');
-      preloadedAudio.onerror = () => setCounselorState('idle');
-
-      const playPromise = preloadedAudio.play();
-      if (playPromise !== undefined) {
-        playPromise.catch((err) => {
-          console.warn('Audio play catch:', err);
-          setCounselorState('idle');
-        });
-      }
-    } else {
-      // Fallback if audio pre-buffer is still fetching
-      const introText =
-        lastResponseText ||
-        `Namaste ${studentName || 'Aman'}! Main Priya Sharma, aapki SABCQ Career Counselor hoon. Aapki exam report mere paas hai. Aap bina kisi jhijhak ke mujhse apne career options ke baare mein baat kar sakte hain!`;
-
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        try { window.speechSynthesis.cancel(); } catch (_) {}
-        const cleanText = introText.replace(/[*#_`~]/g, '').replace(/\s+/g, ' ').trim();
-        const utterance = new SpeechSynthesisUtterance(cleanText);
-        utterance.rate = 1.10; // Faster speech pace for dynamic natural interaction
-        utterance.pitch = 1.02;
-        utterance.lang = 'hi-IN';
-
-        utterance.onstart = () => setCounselorState('speaking');
-        utterance.onend = () => setCounselorState('idle');
-        utterance.onerror = () => setCounselorState('idle');
-
-        try { window.speechSynthesis.speak(utterance); } catch (_) {}
-      }
+    // Session connects silently and waits for user to tap Mic to Speak
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try { window.speechSynthesis.cancel(); } catch (_) {}
     }
-
     setIsCallActive(true);
-    setCounselorState('speaking');
+    setCounselorState('idle');
   };
 
   const handleSendMessage = async (userMessage: string) => {
@@ -105,7 +65,7 @@ export default function Dashboard() {
     setCounselorState('thinking');
 
     try {
-      const res = await fetch(`${API_BASE_URL}/chat`, {
+      const res = await fetch(`${API_BASE_URL}/voice-chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -117,12 +77,33 @@ export default function Dashboard() {
       if (res.ok) {
         const data = await res.json();
         setLastResponseText(data.responseText);
-        speakText(data.responseText);
+
+        if (data.audioBase64) {
+          const audioSrc = `data:${data.mimeType || 'audio/mp3'};base64,${data.audioBase64}`;
+          const audio = new Audio(audioSrc);
+          setCounselorState('speaking');
+
+          audio.onended = () => setCounselorState('idle');
+          audio.onerror = () => {
+            setCounselorState('idle');
+            speakText(data.responseText);
+          };
+
+          const playPromise = audio.play();
+          if (playPromise !== undefined) {
+            playPromise.catch(() => {
+              setCounselorState('idle');
+              speakText(data.responseText);
+            });
+          }
+        } else {
+          speakText(data.responseText);
+        }
       } else {
         setCounselorState('idle');
       }
     } catch (err) {
-      console.error('Chat error:', err);
+      console.error('Voice chat error:', err);
       setCounselorState('idle');
     } finally {
       setIsLoading(false);
@@ -130,89 +111,13 @@ export default function Dashboard() {
   };
 
   // High quality Speech Synthesis for clear Hindi/Hinglish pronunciation
+  // Disabled browser speechSynthesis to prevent duplicate system voice overlap.
+  // Audio is handled 100% natively by Gemini Live WebSocket / Studio TTS Audio MP3.
   const speakText = (text: string) => {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    try {
-      window.speechSynthesis.cancel();
-    } catch (_) {}
-
-    const cleanText = text
-      .replace(/[*#_`~]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-
-    if (!cleanText) return;
-
-    // Split into natural sentence chunks using punctuation delimiters
-    const rawChunks = cleanText.split(/(?<=[.!?।\n])\s+/);
-    const chunks = rawChunks
-      .map((chunk) => chunk.trim())
-      .filter((chunk) => chunk.length > 0);
-
-    if (chunks.length === 0) return;
-
-    let currentChunkIndex = 0;
-    let isCancelled = false;
-
-    setCounselorState('speaking');
-
-    // Find best Hindi / Indian accent female voice if available
-    const voices = window.speechSynthesis.getVoices();
-    const bestVoice =
-      voices.find((v) => (v.lang.includes('hi') || v.lang.includes('IN')) && v.name.toLowerCase().includes('google')) ||
-      voices.find((v) => v.lang.includes('hi') || v.lang.includes('IN')) ||
-      voices.find((v) => v.lang.startsWith('hi')) ||
-      null;
-
-    const speakNextChunk = () => {
-      if (isCancelled || currentChunkIndex >= chunks.length) {
-        setCounselorState('idle');
-        return;
-      }
-
-      const chunkText = chunks[currentChunkIndex];
-      const utterance = new SpeechSynthesisUtterance(chunkText);
-      utterance.rate = 1.10; // Faster natural speed
-      utterance.pitch = 1.02; // Warm tone
-      utterance.lang = 'hi-IN';
-
-      if (bestVoice) {
-        utterance.voice = bestVoice;
-      }
-
-      utterance.onend = () => {
-        if (!isCancelled) {
-          currentChunkIndex++;
-          speakNextChunk();
-        }
-      };
-
-      utterance.onerror = (err: any) => {
-        const errorType = err?.error;
-        if (errorType === 'not-allowed' || errorType === 'canceled' || errorType === 'interrupted') {
-          isCancelled = true;
-          setCounselorState('idle');
-          return;
-        }
-
-        console.warn('Speech synthesis chunk error:', errorType || err);
-        currentChunkIndex++;
-        if (!isCancelled && currentChunkIndex < chunks.length) {
-          setTimeout(speakNextChunk, 50);
-        } else {
-          setCounselorState('idle');
-        }
-      };
-
-      try {
-        window.speechSynthesis.speak(utterance);
-      } catch (err) {
-        console.warn('SpeechSynthesis speak failed:', err);
-        setCounselorState('idle');
-      }
-    };
-
-    speakNextChunk();
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try { window.speechSynthesis.cancel(); } catch (_) {}
+    }
+    setCounselorState('idle');
   };
 
   const handleEndSession = () => {
