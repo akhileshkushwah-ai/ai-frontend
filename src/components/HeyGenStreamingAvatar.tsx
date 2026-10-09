@@ -44,8 +44,10 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
     isFallbackMode,
     counselorState: liveState,
     connectLiveWs,
+    disconnectLiveWs,
     startMicStream,
     stopMicStream,
+    stopAudioPlayback,
     interruptAi,
     sendLiveText,
     triggerFirstIntro,
@@ -54,6 +56,13 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
     onTextChunk: () => {},
     onError: (message) => setLiveError(message),
   });
+
+  const handleEndSessionClick = () => {
+    stopMicStream();
+    stopAudioPlayback();
+    disconnectLiveWs();
+    onEndSession();
+  };
 
   // Connect Gemini Live WS quietly in background
   useEffect(() => {
@@ -350,7 +359,7 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
 
         {/* Top Right End Session Button */}
         <button
-          onClick={onEndSession}
+          onClick={handleEndSessionClick}
           className="flex items-center gap-2.5 px-6 py-2.5 rounded-full bg-[#E11D48] hover:bg-[#F43F5E] text-white font-bold text-sm shadow-[0_0_20px_rgba(225,29,72,0.4)] transition-all hover:scale-105"
           title="End Session"
         >

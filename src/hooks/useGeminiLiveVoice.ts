@@ -51,9 +51,30 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
   const audioQueueRef = useRef<AudioBufferSourceNode[]>([]);
   const nextStartTimeRef = useRef<number>(0);
 
+  const idleDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   const updateState = useCallback((state: CounselorState) => {
-    setCounselorState(state);
-    optionsRef.current.onStateChange?.(state);
+    if (state === 'speaking') {
+      if (idleDebounceTimerRef.current) {
+        clearTimeout(idleDebounceTimerRef.current);
+        idleDebounceTimerRef.current = null;
+      }
+      setCounselorState('speaking');
+      optionsRef.current.onStateChange?.('speaking');
+    } else if (state === 'idle') {
+      if (idleDebounceTimerRef.current) return;
+      // 400ms Hysteresis Debounce: prevents state flapping to 'idle' during small network packet jitter
+      idleDebounceTimerRef.current = setTimeout(() => {
+        idleDebounceTimerRef.current = null;
+        if (audioQueueRef.current.length === 0) {
+          setCounselorState('idle');
+          optionsRef.current.onStateChange?.('idle');
+        }
+      }, 400);
+    } else {
+      setCounselorState(state);
+      optionsRef.current.onStateChange?.(state);
+    }
   }, []);
 
   const raiseError = useCallback((message: string) => {
@@ -76,8 +97,12 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
     return false;
   }, []);
 
-  // Stop current audio playback queue (Barge-in Interruption)
+  // Stop current audio playback queue (Barge-in Interruption & Session End)
   const stopAudioPlayback = useCallback(() => {
+    if (idleDebounceTimerRef.current) {
+      clearTimeout(idleDebounceTimerRef.current);
+      idleDebounceTimerRef.current = null;
+    }
     audioQueueRef.current.forEach((source) => {
       try {
         source.stop();
@@ -86,10 +111,11 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
     });
     audioQueueRef.current = [];
     nextStartTimeRef.current = 0;
-    updateState('idle');
-  }, [updateState]);
+    setCounselorState('idle');
+    optionsRef.current.onStateChange?.('idle');
+  }, []);
 
-  // Play PCM 24kHz Base64 chunk using Web Audio API
+  // Play PCM 24kHz Base64 chunk using Web Audio API with 120ms Jitter Buffer Smoothing
   const playPcm24kChunk = useCallback(
     (base64Data: string, mimeType?: string) => {
       try {
@@ -111,22 +137,19 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
           audioCtx.resume();
         }
 
-        // Convert Base64 to ArrayBuffer
+        // Convert Base64 binary string to 16-bit Little-Endian Float32 PCM samples
         const binaryString = atob(base64Data);
         const len = binaryString.length;
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-
-        // Convert Int16 PCM to Float32
-        const int16Array = new Int16Array(bytes.buffer);
-        const numSamples = int16Array.length;
+        const numSamples = Math.floor(len / 2);
         if (numSamples === 0) return;
 
         const float32Array = new Float32Array(numSamples);
         for (let i = 0; i < numSamples; i++) {
-          float32Array[i] = int16Array[i] / 32768.0;
+          const low = binaryString.charCodeAt(i * 2);
+          const high = binaryString.charCodeAt(i * 2 + 1);
+          let sample = (high << 8) | low;
+          if (sample & 0x8000) sample |= ~0xffff; // Sign-extend 16-bit negative PCM values
+          float32Array[i] = sample / 32768.0;
         }
 
         const buffer = audioCtx.createBuffer(1, numSamples, pcmRate);
@@ -137,10 +160,15 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
         source.connect(audioCtx.destination);
 
         const currentTime = audioCtx.currentTime;
-        // Never schedule in the past: a too-small nextStartTime causes glitches.
-        const startTime = Math.max(currentTime, nextStartTimeRef.current);
-        source.start(startTime);
+        // Jitter Buffer: Add 120ms initial offset when buffer queue was empty to absorb network latency variations
+        let startTime: number;
+        if (nextStartTimeRef.current < currentTime) {
+          startTime = currentTime + 0.12; // 120ms jitter buffer
+        } else {
+          startTime = nextStartTimeRef.current;
+        }
 
+        source.start(startTime);
         nextStartTimeRef.current = startTime + buffer.duration;
         audioQueueRef.current.push(source);
         updateState('speaking');
@@ -415,6 +443,7 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
     disconnectLiveWs,
     startMicStream,
     stopMicStream,
+    stopAudioPlayback,
     interruptAi,
     sendLiveText,
     triggerFirstIntro,
