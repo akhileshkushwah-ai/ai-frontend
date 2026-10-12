@@ -64,12 +64,32 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
     onEndSession();
   };
 
+  const counselorState = isLiveWsConnected && liveState !== 'idle' ? liveState : propsState;
+
   // Connect Gemini Live WS quietly in background
   useEffect(() => {
     connectLiveWs();
   }, [connectLiveWs]);
 
-  const counselorState = isLiveWsConnected && liveState !== 'idle' ? liveState : propsState;
+  // 1-Second Auto-Intro Trigger upon session connect (No manual button tap needed)
+  useEffect(() => {
+    if (isLiveWsConnected && !hasSpokenIntroRef.current) {
+      const timer = setTimeout(() => {
+        hasSpokenIntroRef.current = true;
+        triggerFirstIntro();
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [isLiveWsConnected, triggerFirstIntro]);
+
+  // Continuous Natural Mic Listening: Automatically starts listening once AI finishes intro/speaking
+  useEffect(() => {
+    if (isLiveWsConnected && hasSpokenIntroRef.current && counselorState === 'idle') {
+      if (!isMicActive) {
+        startMicStream().catch(console.warn);
+      }
+    }
+  }, [isLiveWsConnected, counselorState, isMicActive, startMicStream]);
 
   // Dual-Video Ping-Pong Crossfade Playback Controller
   useEffect(() => {
@@ -430,7 +450,13 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
 
         {/* Live Status Text underneath capsule */}
         <p className="mt-3 text-xs font-semibold tracking-wider text-cyan-300 uppercase bg-slate-950/80 px-4 py-1 rounded-full border border-cyan-500/20 backdrop-blur-md">
-          {isListening ? '● Listening... Speak your question' : counselorState === 'thinking' ? '● AI Counselor Evaluating Context...' : counselorState === 'speaking' ? '● AI Counselor Speaking...' : 'Tap Mic to Speak'}
+          {counselorState === 'speaking'
+            ? '● Priya Sharma Speaking...'
+            : counselorState === 'thinking'
+            ? '● Evaluating Context...'
+            : isMicActive || isListening
+            ? '● Listening to you... Speak naturally'
+            : '● Live Voice Room Active'}
         </p>
 
       </div>

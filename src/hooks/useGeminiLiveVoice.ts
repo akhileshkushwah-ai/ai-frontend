@@ -52,6 +52,9 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
   const nextStartTimeRef = useRef<number>(0);
 
   const idleDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
+  const compressorNodeRef = useRef<DynamicsCompressorNode | null>(null);
+  const chunkCountRef = useRef<number>(0);
 
   const updateState = useCallback((state: CounselorState) => {
     if (state === 'speaking') {
@@ -111,6 +114,7 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
     });
     audioQueueRef.current = [];
     nextStartTimeRef.current = 0;
+    chunkCountRef.current = 0;
     setCounselorState('idle');
     optionsRef.current.onStateChange?.('idle');
   }, []);
@@ -157,13 +161,31 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
 
         const source = audioCtx.createBufferSource();
         source.buffer = buffer;
-        source.connect(audioCtx.destination);
+
+        // Anti-Clipping Master Chain: GainNode (0.85) -> DynamicsCompressorNode -> Destination
+        // Prevents speaker crackling/buzzing and harsh plosive distortion ("fatti hui awaj")
+        if (!gainNodeRef.current || !compressorNodeRef.current) {
+          const compressor = audioCtx.createDynamicsCompressor();
+          compressor.threshold.setValueAtTime(-12, audioCtx.currentTime);
+          compressor.knee.setValueAtTime(10, audioCtx.currentTime);
+          compressor.ratio.setValueAtTime(4, audioCtx.currentTime);
+          compressor.attack.setValueAtTime(0.003, audioCtx.currentTime);
+          compressor.release.setValueAtTime(0.25, audioCtx.currentTime);
+          compressor.connect(audioCtx.destination);
+          compressorNodeRef.current = compressor;
+
+          const gain = audioCtx.createGain();
+          gain.gain.value = 0.85; // Clean headroom
+          gain.connect(compressor);
+          gainNodeRef.current = gain;
+        }
+        source.connect(gainNodeRef.current);
 
         const currentTime = audioCtx.currentTime;
-        // Jitter Buffer: Add 120ms initial offset when buffer queue was empty to absorb network latency variations
+        // Jitter Buffer: 50ms initial lead-in offset on fresh speech burst, then seamless timeline chaining
         let startTime: number;
         if (nextStartTimeRef.current < currentTime) {
-          startTime = currentTime + 0.12; // 120ms jitter buffer
+          startTime = currentTime + 0.05;
         } else {
           startTime = nextStartTimeRef.current;
         }
@@ -171,6 +193,7 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
         source.start(startTime);
         nextStartTimeRef.current = startTime + buffer.duration;
         audioQueueRef.current.push(source);
+        chunkCountRef.current += 1;
         updateState('speaking');
 
         source.onended = () => {
@@ -182,6 +205,9 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
             audioQueueRef.current.length === 0 &&
             audioCtx.currentTime >= nextStartTimeRef.current
           ) {
+            console.log(
+              `[Gemini Live] Audio queue complete (${chunkCountRef.current} chunks played). Setting state to idle.`,
+            );
             updateState('idle');
           }
         };
@@ -247,8 +273,16 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
             setIsFallbackMode(false);
             break;
           case 'interrupted':
-          case 'turn_complete':
+            // Student barged in / spoke over the counselor: cancel audio playback immediately
+            console.log('[Gemini Live] Interruption received. Halting audio playback.');
             stopAudioPlayback();
+            break;
+          case 'turn_complete':
+            // Gemini finished producing tokens on the backend.
+            // NEVER stop already-scheduled audio here! Let all queued chunks play to the end.
+            console.log(
+              `[Gemini Live] turn_complete received. Letting remaining ${audioQueueRef.current.length} queued chunks finish naturally.`,
+            );
             break;
           case 'live_ws_closed':
             setIsLiveWsConnected(false);
@@ -340,6 +374,11 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
       silentGain.gain.value = 0;
 
       scriptNode.onaudioprocess = (e) => {
+        // Echo Shield: Suppress mic forwarding while AI is actively speaking to prevent echo self-interruption
+        if (counselorState === 'speaking') {
+          return;
+        }
+
         const inputBuffer = e.inputBuffer.getChannelData(0);
         const outputLength = Math.floor(inputBuffer.length / sampleRatio);
         if (outputLength <= 0) return;
