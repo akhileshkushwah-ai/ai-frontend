@@ -36,11 +36,17 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
   const [liveError, setLiveError] = useState<string | null>(null);
 
   const hasSpokenIntroRef = useRef(false);
+  const [introStarted, setIntroStarted] = useState(false);
+  const [introCompleted, setIntroCompleted] = useState(false);
+  const [counselingInitiated, setCounselingInitiated] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const introHasPlayedAudioRef = useRef(false);
 
   // Real-time Gemini Multimodal Live Voice-to-Voice Hook
   const {
     isLiveWsConnected,
     isMicActive,
+    isUserSpeaking,
     isFallbackMode,
     counselorState: liveState,
     connectLiveWs,
@@ -71,25 +77,38 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
     connectLiveWs();
   }, [connectLiveWs]);
 
-  // 1-Second Auto-Intro Trigger upon session connect (No manual button tap needed)
+  // 1-Second Auto-Intro Trigger upon session connect
   useEffect(() => {
     if (isLiveWsConnected && !hasSpokenIntroRef.current) {
       const timer = setTimeout(() => {
         hasSpokenIntroRef.current = true;
+        setIntroStarted(true);
         triggerFirstIntro();
       }, 1000);
       return () => clearTimeout(timer);
     }
   }, [isLiveWsConnected, triggerFirstIntro]);
 
-  // Continuous Natural Mic Listening: Automatically starts listening once AI finishes intro/speaking
+  // Track intro audio playback start
   useEffect(() => {
-    if (isLiveWsConnected && hasSpokenIntroRef.current && counselorState === 'idle') {
-      if (!isMicActive) {
-        startMicStream().catch(console.warn);
-      }
+    if (introStarted && counselorState === 'speaking') {
+      introHasPlayedAudioRef.current = true;
     }
-  }, [isLiveWsConnected, counselorState, isMicActive, startMicStream]);
+  }, [introStarted, counselorState]);
+
+  // Mark intro completed once intro audio finishes playing and goes back to 'idle'
+  useEffect(() => {
+    if (introStarted && !introCompleted && introHasPlayedAudioRef.current && counselorState === 'idle') {
+      setIntroCompleted(true);
+    }
+  }, [introStarted, introCompleted, counselorState]);
+
+  // Maintain continuous hands-free mic listening once counseling is initiated
+  useEffect(() => {
+    if (counselingInitiated && isLiveWsConnected && !isMicActive && !isMuted) {
+      startMicStream().catch(console.warn);
+    }
+  }, [counselingInitiated, isLiveWsConnected, isMicActive, isMuted, startMicStream]);
 
   // Dual-Video Ping-Pong Crossfade Playback Controller
   useEffect(() => {
@@ -218,77 +237,27 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
     setInputText('');
   };
 
-  const [isListening, setIsListening] = useState(false);
-  const recognitionRef = useRef<any>(null);
-
-  const toggleSpeechRecognition = async () => {
-    if (counselorState === 'speaking') {
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        try { window.speechSynthesis.cancel(); } catch (_) {}
-      }
+  const handleInitiateCounseling = async () => {
+    setIsMuted(false);
+    setCounselingInitiated(true);
+    try {
+      await startMicStream();
+    } catch (err) {
+      console.warn('Failed to start mic stream on initiate:', err);
     }
+  };
 
-    // First Mic tap triggers official SABCQ Opening Intro
-    if (!hasSpokenIntroRef.current) {
-      hasSpokenIntroRef.current = true;
-      if (isLiveWsConnected) {
-        triggerFirstIntro();
-      }
-    }
-
-    if (isListening) {
-      if (recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch (_) {}
-      }
-      setIsListening(false);
-      return;
-    }
-
-    const SpeechRecognitionClass =
-      (typeof window !== 'undefined' && ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition));
-
-    if (SpeechRecognitionClass) {
-      try {
-        const recognition = new SpeechRecognitionClass();
-        recognition.continuous = false;
-        recognition.interimResults = false;
-        recognition.lang = 'hi-IN';
-
-        recognition.onstart = () => {
-          setIsListening(true);
-          setLiveError(null);
-        };
-
-        recognition.onresult = (event: any) => {
-          const spokenText = event.results[0][0].transcript;
-          setIsListening(false);
-          if (spokenText && spokenText.trim()) {
-            if (isLiveWsConnected) {
-              sendLiveText(spokenText.trim());
-            } else {
-              onSendMessage(spokenText.trim());
-            }
-          }
-        };
-
-        recognition.onerror = (err: any) => {
-          console.warn('Speech recognition error:', err);
-          setIsListening(false);
-        };
-
-        recognition.onend = () => {
-          setIsListening(false);
-        };
-
-        recognitionRef.current = recognition;
-        recognition.start();
-      } catch (err) {
-        console.warn('Speech recognition init error:', err);
-        setIsListening(false);
-      }
+  const toggleMicMute = async () => {
+    if (isMicActive) {
+      setIsMuted(true);
+      stopMicStream();
     } else {
-      console.warn('Browser does not support SpeechRecognition');
-      setIsListening(false);
+      setIsMuted(false);
+      try {
+        await startMicStream();
+      } catch (err) {
+        console.warn('Failed to resume mic stream:', err);
+      }
     }
   };
 
@@ -402,7 +371,7 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
         {counselorState === 'thinking' && (
           <div className="flex items-center gap-2 bg-amber-500/20 backdrop-blur-md px-5 py-2 rounded-full border border-amber-500/40 text-amber-300 shadow-2xl animate-pulse">
             <Sparkles className="w-4 h-4 animate-spin text-amber-400" />
-            <span className="text-xs font-bold tracking-wider uppercase">Evaluating Context...</span>
+            <span className="text-xs font-bold tracking-wider uppercase">Preparing Answer...</span>
           </div>
         )}
       </div>
@@ -410,54 +379,244 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
       {/* BOTTOM CENTER MIC & AUDIO VISUALIZER CAPSULE */}
       <div className="relative z-10 p-6 flex flex-col items-center justify-center">
         
-        {/* Floating Capsule Bar matching image */}
-        <div className="flex items-center gap-6 bg-slate-950/80 backdrop-blur-xl px-8 py-3 rounded-full border border-cyan-500/30 shadow-[0_0_40px_rgba(6,182,212,0.25)]">
-          
-          {/* Left Audio Waveform Bars */}
-          <div className="flex items-center gap-1.5 h-8">
-            <span className={`w-1 bg-cyan-400 rounded-full transition-all duration-300 ${isListening || counselorState === 'speaking' ? 'h-6 animate-pulse' : 'h-2'}`} />
-            <span className={`w-1 bg-cyan-400 rounded-full transition-all duration-300 ${isListening || counselorState === 'speaking' ? 'h-8 animate-bounce' : 'h-3'}`} />
-            <span className={`w-1 bg-cyan-400 rounded-full transition-all duration-300 ${isListening || counselorState === 'speaking' ? 'h-5 animate-pulse' : 'h-2'}`} />
-            <span className={`w-1 bg-cyan-400 rounded-full transition-all duration-300 ${isListening || counselorState === 'speaking' ? 'h-7 animate-bounce' : 'h-4'}`} />
-            <span className={`w-1 bg-cyan-400 rounded-full transition-all duration-300 ${isListening || counselorState === 'speaking' ? 'h-4 animate-pulse' : 'h-2'}`} />
-          </div>
+        {!counselingInitiated ? (
+          // PRE-COUNSELING STATE: Intro is playing OR waiting for user to click "Initiate Counseling"
+          <div className="flex flex-col items-center gap-3">
+            {!introCompleted ? (
+              // Intro is currently playing
+              <div className="flex items-center gap-4 bg-slate-950/85 backdrop-blur-xl px-7 py-3.5 rounded-full border border-cyan-500/30 shadow-[0_0_40px_rgba(6,182,212,0.25)]">
+                <div className="flex items-center gap-1.5 h-6">
+                  <span className="w-1 bg-cyan-400 rounded-full h-3 animate-pulse" />
+                  <span className="w-1 bg-cyan-400 rounded-full h-6 animate-bounce" />
+                  <span className="w-1 bg-cyan-400 rounded-full h-4 animate-pulse" />
+                  <span className="w-1 bg-cyan-400 rounded-full h-6 animate-bounce" />
+                  <span className="w-1 bg-cyan-400 rounded-full h-2 animate-pulse" />
+                </div>
+                <span className="text-xs font-semibold text-cyan-200 tracking-wide flex items-center gap-2">
+                  <Volume2 className="w-4 h-4 text-cyan-400 animate-pulse" />
+                  Priya Sharma is giving introduction...
+                </span>
+                <div className="flex items-center gap-1.5 h-6">
+                  <span className="w-1 bg-cyan-400 rounded-full h-2 animate-pulse" />
+                  <span className="w-1 bg-cyan-400 rounded-full h-5 animate-bounce" />
+                  <span className="w-1 bg-cyan-400 rounded-full h-3 animate-pulse" />
+                  <span className="w-1 bg-cyan-400 rounded-full h-6 animate-bounce" />
+                  <span className="w-1 bg-cyan-400 rounded-full h-3 animate-pulse" />
+                </div>
+              </div>
+            ) : (
+              // Intro has completed: Show "Initiate Counseling" Button!
+              <button
+                type="button"
+                onClick={handleInitiateCounseling}
+                className="flex items-center gap-3 px-8 py-3.5 rounded-full bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white font-bold text-sm shadow-[0_0_50px_rgba(6,182,212,0.6)] hover:scale-105 transition-all duration-300 ring-4 ring-cyan-400/40 animate-pulse cursor-pointer"
+              >
+                <Sparkles className="w-5 h-5 text-cyan-200 animate-spin" />
+                <span className="tracking-wide text-sm font-extrabold uppercase">Initiate Counseling</span>
+              </button>
+            )}
 
-          {/* Central Glowing Mic Circle Button */}
-          <button
-            type="button"
-            onClick={toggleSpeechRecognition}
-            className={`w-14 h-14 rounded-full flex items-center justify-center text-white transition-all duration-300 shadow-2xl cursor-pointer ${
-              isListening
-                ? 'bg-rose-600 shadow-[0_0_35px_rgba(225,29,72,0.9)] animate-pulse scale-105 ring-4 ring-rose-400/40'
+            <p className="text-xs font-semibold tracking-wider text-cyan-300 uppercase bg-slate-950/80 px-4 py-1 rounded-full border border-cyan-500/20 backdrop-blur-md">
+              {!introCompleted
+                ? '● Please listen to the introduction...'
+                : '● Introduction Complete — Click "Initiate Counseling" to speak'}
+            </p>
+          </div>
+        ) : (
+          // CONTINUOUS HANDS-FREE FULL-DUPLEX MODE ACTIVE!
+          <div className="flex flex-col items-center gap-3">
+            <div className={`flex items-center gap-6 bg-slate-950/85 backdrop-blur-xl px-8 py-3 rounded-full border transition-all duration-300 shadow-2xl ${
+              isUserSpeaking
+                ? 'border-emerald-500/50 shadow-[0_0_40px_rgba(16,185,129,0.3)] ring-2 ring-emerald-500/20'
                 : counselorState === 'thinking'
-                ? 'bg-amber-600 shadow-[0_0_35px_rgba(245,158,11,0.9)] animate-pulse scale-105'
-                : 'bg-gradient-to-r from-blue-600 to-cyan-500 shadow-[0_0_30px_rgba(6,182,212,0.8)] hover:scale-105 hover:shadow-[0_0_40px_rgba(6,182,212,1)] ring-4 ring-cyan-400/30'
-            }`}
-            title={isListening ? 'Listening to your question...' : 'Speak Now'}
-          >
-            {isListening ? <Radio className="w-6 h-6 animate-spin text-white" /> : <Mic className="w-6 h-6 text-white" />}
-          </button>
+                ? 'border-amber-500/40 shadow-[0_0_35px_rgba(245,158,11,0.25)]'
+                : 'border-cyan-500/30 shadow-[0_0_40px_rgba(6,182,212,0.25)]'
+            }`}>
+              {/* Left Audio Waveform Bars */}
+              <div className="flex items-center gap-1.5 h-8">
+                <span className={`w-1 rounded-full transition-all duration-300 ${
+                  isUserSpeaking
+                    ? 'bg-emerald-400 h-6 animate-pulse'
+                    : counselorState === 'speaking'
+                    ? 'bg-cyan-400 h-6 animate-pulse'
+                    : counselorState === 'thinking'
+                    ? 'bg-amber-400 h-3 animate-pulse'
+                    : isMicActive
+                    ? 'bg-cyan-400/40 h-2'
+                    : 'bg-slate-700 h-1.5'
+                }`} />
+                <span className={`w-1 rounded-full transition-all duration-300 ${
+                  isUserSpeaking
+                    ? 'bg-emerald-400 h-8 animate-bounce'
+                    : counselorState === 'speaking'
+                    ? 'bg-cyan-400 h-8 animate-bounce'
+                    : counselorState === 'thinking'
+                    ? 'bg-amber-400 h-4 animate-pulse'
+                    : isMicActive
+                    ? 'bg-cyan-400/50 h-3'
+                    : 'bg-slate-700 h-1.5'
+                }`} />
+                <span className={`w-1 rounded-full transition-all duration-300 ${
+                  isUserSpeaking
+                    ? 'bg-emerald-400 h-5 animate-pulse'
+                    : counselorState === 'speaking'
+                    ? 'bg-cyan-400 h-5 animate-pulse'
+                    : counselorState === 'thinking'
+                    ? 'bg-amber-400 h-2.5 animate-pulse'
+                    : isMicActive
+                    ? 'bg-cyan-400/40 h-2'
+                    : 'bg-slate-700 h-1.5'
+                }`} />
+                <span className={`w-1 rounded-full transition-all duration-300 ${
+                  isUserSpeaking
+                    ? 'bg-emerald-400 h-7 animate-bounce'
+                    : counselorState === 'speaking'
+                    ? 'bg-cyan-400 h-7 animate-bounce'
+                    : counselorState === 'thinking'
+                    ? 'bg-amber-400 h-4 animate-pulse'
+                    : isMicActive
+                    ? 'bg-cyan-400/60 h-3.5'
+                    : 'bg-slate-700 h-1.5'
+                }`} />
+                <span className={`w-1 rounded-full transition-all duration-300 ${
+                  isUserSpeaking
+                    ? 'bg-emerald-400 h-4 animate-pulse'
+                    : counselorState === 'speaking'
+                    ? 'bg-cyan-400 h-4 animate-pulse'
+                    : counselorState === 'thinking'
+                    ? 'bg-amber-400 h-2 animate-pulse'
+                    : isMicActive
+                    ? 'bg-cyan-400/40 h-2'
+                    : 'bg-slate-700 h-1.5'
+                }`} />
+              </div>
 
-          {/* Right Audio Waveform Bars */}
-          <div className="flex items-center gap-1.5 h-8">
-            <span className={`w-1 bg-cyan-400 rounded-full transition-all duration-300 ${isListening || counselorState === 'speaking' ? 'h-4 animate-pulse' : 'h-2'}`} />
-            <span className={`w-1 bg-cyan-400 rounded-full transition-all duration-300 ${isListening || counselorState === 'speaking' ? 'h-7 animate-bounce' : 'h-4'}`} />
-            <span className={`w-1 bg-cyan-400 rounded-full transition-all duration-300 ${isListening || counselorState === 'speaking' ? 'h-5 animate-pulse' : 'h-2'}`} />
-            <span className={`w-1 bg-cyan-400 rounded-full transition-all duration-300 ${isListening || counselorState === 'speaking' ? 'h-8 animate-bounce' : 'h-3'}`} />
-            <span className={`w-1 bg-cyan-400 rounded-full transition-all duration-300 ${isListening || counselorState === 'speaking' ? 'h-6 animate-pulse' : 'h-2'}`} />
+              {/* Central Glowing Mic Circle Button (Hands-free active / Click to Mute) */}
+              <button
+                type="button"
+                onClick={toggleMicMute}
+                className={`w-14 h-14 rounded-full flex items-center justify-center text-white transition-all duration-300 shadow-2xl cursor-pointer ${
+                  counselorState === 'speaking'
+                    ? 'bg-cyan-600 shadow-[0_0_35px_rgba(6,182,212,0.9)] animate-pulse scale-105'
+                    : counselorState === 'thinking'
+                    ? 'bg-amber-600 shadow-[0_0_35px_rgba(245,158,11,0.9)] animate-pulse scale-105 ring-4 ring-amber-400/40'
+                    : isUserSpeaking
+                    ? 'bg-emerald-500 shadow-[0_0_40px_rgba(16,185,129,0.95)] animate-pulse scale-110 ring-4 ring-emerald-300/60'
+                    : isMicActive
+                    ? 'bg-emerald-600 shadow-[0_0_35px_rgba(16,185,129,0.9)] ring-4 ring-emerald-400/40'
+                    : 'bg-rose-600 shadow-[0_0_30px_rgba(225,29,72,0.8)] ring-4 ring-rose-400/30'
+                }`}
+                title={
+                  counselorState === 'speaking'
+                    ? 'Priya Sharma is speaking (Speak to interrupt)'
+                    : counselorState === 'thinking'
+                    ? 'Preparing your answer...'
+                    : isUserSpeaking
+                    ? 'Listening to you speak'
+                    : isMicActive
+                    ? 'Mic is live listening (Click to mute)'
+                    : 'Mic is muted (Click to unmute)'
+                }
+              >
+                {counselorState === 'speaking' ? (
+                  <Radio className="w-6 h-6 animate-spin text-white" />
+                ) : counselorState === 'thinking' ? (
+                  <Sparkles className="w-6 h-6 animate-spin text-white" />
+                ) : isUserSpeaking ? (
+                  <Mic className="w-6 h-6 text-white animate-pulse" />
+                ) : isMicActive ? (
+                  <Mic className="w-6 h-6 text-white" />
+                ) : (
+                  <MicOff className="w-6 h-6 text-white" />
+                )}
+              </button>
+
+              {/* Right Audio Waveform Bars */}
+              <div className="flex items-center gap-1.5 h-8">
+                <span className={`w-1 rounded-full transition-all duration-300 ${
+                  isUserSpeaking
+                    ? 'bg-emerald-400 h-4 animate-pulse'
+                    : counselorState === 'speaking'
+                    ? 'bg-cyan-400 h-4 animate-pulse'
+                    : counselorState === 'thinking'
+                    ? 'bg-amber-400 h-2.5 animate-pulse'
+                    : isMicActive
+                    ? 'bg-cyan-400/40 h-2'
+                    : 'bg-slate-700 h-1.5'
+                }`} />
+                <span className={`w-1 rounded-full transition-all duration-300 ${
+                  isUserSpeaking
+                    ? 'bg-emerald-400 h-7 animate-bounce'
+                    : counselorState === 'speaking'
+                    ? 'bg-cyan-400 h-7 animate-bounce'
+                    : counselorState === 'thinking'
+                    ? 'bg-amber-400 h-4 animate-pulse'
+                    : isMicActive
+                    ? 'bg-cyan-400/60 h-3.5'
+                    : 'bg-slate-700 h-1.5'
+                }`} />
+                <span className={`w-1 rounded-full transition-all duration-300 ${
+                  isUserSpeaking
+                    ? 'bg-emerald-400 h-5 animate-pulse'
+                    : counselorState === 'speaking'
+                    ? 'bg-cyan-400 h-5 animate-pulse'
+                    : counselorState === 'thinking'
+                    ? 'bg-amber-400 h-3 animate-pulse'
+                    : isMicActive
+                    ? 'bg-cyan-400/40 h-2'
+                    : 'bg-slate-700 h-1.5'
+                }`} />
+                <span className={`w-1 rounded-full transition-all duration-300 ${
+                  isUserSpeaking
+                    ? 'bg-emerald-400 h-8 animate-bounce'
+                    : counselorState === 'speaking'
+                    ? 'bg-cyan-400 h-8 animate-bounce'
+                    : counselorState === 'thinking'
+                    ? 'bg-amber-400 h-4 animate-pulse'
+                    : isMicActive
+                    ? 'bg-cyan-400/50 h-3'
+                    : 'bg-slate-700 h-1.5'
+                }`} />
+                <span className={`w-1 rounded-full transition-all duration-300 ${
+                  isUserSpeaking
+                    ? 'bg-emerald-400 h-6 animate-pulse'
+                    : counselorState === 'speaking'
+                    ? 'bg-cyan-400 h-6 animate-pulse'
+                    : counselorState === 'thinking'
+                    ? 'bg-amber-400 h-2 animate-pulse'
+                    : isMicActive
+                    ? 'bg-cyan-400/40 h-2'
+                    : 'bg-slate-700 h-1.5'
+                }`} />
+              </div>
+            </div>
+
+            {/* Live Status Text underneath capsule */}
+            <p
+              className={`text-xs font-semibold tracking-wider uppercase px-4 py-1.5 rounded-full backdrop-blur-md transition-all duration-300 ${
+                counselorState === 'speaking'
+                  ? 'text-cyan-300 bg-cyan-950/80 border border-cyan-500/30 shadow-[0_0_20px_rgba(6,182,212,0.2)]'
+                  : counselorState === 'thinking'
+                  ? 'text-amber-300 bg-amber-950/80 border border-amber-500/40 shadow-[0_0_25px_rgba(245,158,11,0.3)] animate-pulse'
+                  : isUserSpeaking
+                  ? 'text-emerald-300 bg-emerald-950/80 border border-emerald-500/40 shadow-[0_0_25px_rgba(16,185,129,0.3)] animate-pulse'
+                  : isMicActive
+                  ? 'text-cyan-200/90 bg-slate-950/80 border border-cyan-500/20'
+                  : 'text-rose-300 bg-rose-950/80 border border-rose-500/30'
+              }`}
+            >
+              {counselorState === 'speaking'
+                ? '● Priya Sharma Speaking... (Speak to interrupt)'
+                : counselorState === 'thinking'
+                ? '● Preparing your answer...'
+                : isUserSpeaking
+                ? '● Listening to you... Speak naturally'
+                : isMicActive
+                ? '● Continuous Live Mic Active — Speak anytime'
+                : '● Mic Muted (Click to resume)'}
+            </p>
           </div>
-        </div>
-
-        {/* Live Status Text underneath capsule */}
-        <p className="mt-3 text-xs font-semibold tracking-wider text-cyan-300 uppercase bg-slate-950/80 px-4 py-1 rounded-full border border-cyan-500/20 backdrop-blur-md">
-          {counselorState === 'speaking'
-            ? '● Priya Sharma Speaking...'
-            : counselorState === 'thinking'
-            ? '● Evaluating Context...'
-            : isMicActive || isListening
-            ? '● Listening to you... Speak naturally'
-            : '● Live Voice Room Active'}
-        </p>
+        )}
 
       </div>
 
