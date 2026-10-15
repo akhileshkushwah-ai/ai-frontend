@@ -1,14 +1,13 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Wifi, Sparkles, UserCheck, PhoneOff, Mic, MicOff, Send, Key, Volume2, ShieldCheck, Play, Layers, Radio } from 'lucide-react';
+import { Wifi, Sparkles, UserCheck, PhoneOff, Mic, MicOff, Key, Volume2, ShieldCheck, Play, Layers, Radio } from 'lucide-react';
 import { useGeminiLiveVoice } from '../hooks/useGeminiLiveVoice';
 
 interface StreamingAvatarProps {
   counselorState: 'idle' | 'thinking' | 'speaking';
-  responseText: string;
-  onSendMessage: (msg: string) => void;
-  isLoading: boolean;
+  responseText?: string;
+  isLoading?: boolean;
   onEndSession: () => void;
   studentName: string;
 }
@@ -16,7 +15,6 @@ interface StreamingAvatarProps {
 export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
   counselorState: propsState,
   responseText,
-  onSendMessage,
   isLoading,
   onEndSession,
   studentName,
@@ -26,7 +24,6 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
   const [activeVideo, setActiveVideo] = useState<'A' | 'B'>('A');
   const isSwitchingRef = useRef(false);
 
-  const [inputText, setInputText] = useState('');
   const [heyGenKey, setHeyGenKey] = useState('');
   const [isKeySaved, setIsKeySaved] = useState(false);
   const [showKeyModal, setShowKeyModal] = useState(false);
@@ -57,6 +54,7 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
     interruptAi,
     sendLiveText,
     triggerFirstIntro,
+    currentPhaseInfo,
   } = useGeminiLiveVoice({
     onConnected: () => setLiveError(null),
     onTextChunk: () => {},
@@ -219,24 +217,6 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
     return () => cancelAnimationFrame(animFrameId);
   }, [counselorState]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const message = inputText.trim();
-    if (!message || isLoading) return;
-
-    if (counselorState === 'speaking') {
-      interruptAi();
-    }
-
-    if (isLiveWsConnected) {
-      setLiveError(null);
-      sendLiveText(message);
-    } else {
-      onSendMessage(message);
-    }
-    setInputText('');
-  };
-
   const handleInitiateCounseling = async () => {
     setIsMuted(false);
     setCounselingInitiated(true);
@@ -321,8 +301,8 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
         <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-transparent to-slate-950/40 pointer-events-none" />
       </div>
 
-      {/* TOP OVERLAY HEADER: Counselor Profile (Left), SABCQ Phase Badge (Center), End Session (Right) */}
-      <div className="relative z-10 p-6 flex flex-wrap items-center justify-between gap-3 w-full">
+      {/* TOP OVERLAY HEADER: Counselor Profile (Left) & SABCQ Phase Badge (Right) */}
+      <div className="relative z-10 p-6 flex items-center justify-between gap-3 w-full">
         {/* Top Left Counselor Info Badge */}
         <div className="flex items-center gap-3 bg-slate-900/90 backdrop-blur-xl px-4 py-2.5 rounded-full border border-white/10 shadow-2xl">
           <div className="relative flex items-center justify-center">
@@ -338,93 +318,77 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
           </div>
         </div>
 
-        {/* Top Center SABCQ 45-Min Counseling Phase Badge */}
-        <div className="flex items-center gap-2 bg-gradient-to-r from-cyan-950/90 via-blue-950/90 to-indigo-950/90 backdrop-blur-xl px-4 py-2 rounded-full border border-cyan-500/40 shadow-xl">
-          <Layers className="w-4 h-4 text-cyan-400 animate-pulse" />
-          <span className="text-xs font-bold text-cyan-300 tracking-wider uppercase">
-            SABCQ 45-Min Session • Active Phase
-          </span>
+        {/* Top Right SABCQ Phase Badge (Shifted from center to End Session position) */}
+        <div className="flex items-center gap-2.5 bg-gradient-to-r from-cyan-950/90 via-blue-950/90 to-indigo-950/90 backdrop-blur-xl px-5 py-2.5 rounded-full border border-cyan-500/40 shadow-xl max-w-lg">
+          <Layers className="w-4 h-4 text-cyan-400 shrink-0 animate-pulse" />
+          <div className="flex flex-col text-left">
+            <span className="text-[10px] font-semibold text-cyan-400 tracking-wider uppercase">
+              {currentPhaseInfo?.phaseName || 'Introduction & Counseling Setup'}
+            </span>
+            <span className="text-xs font-bold text-white tracking-wide truncate">
+              {currentPhaseInfo?.milestoneName || 'Welcome & Introduction'}
+            </span>
+          </div>
         </div>
-
-        {/* Top Right End Session Button */}
-        <button
-          onClick={handleEndSessionClick}
-          className="flex items-center gap-2.5 px-6 py-2.5 rounded-full bg-[#E11D48] hover:bg-[#F43F5E] text-white font-bold text-sm shadow-[0_0_20px_rgba(225,29,72,0.4)] transition-all hover:scale-105"
-          title="End Session"
-        >
-          <PhoneOff className="w-4 h-4" />
-          <span>End Session</span>
-        </button>
       </div>
 
       {/* CENTER STATUS OVERLAY */}
-      <div className="relative z-10 flex flex-col items-center justify-center p-4 text-center">
-        {isFallbackMode && (
+      {isFallbackMode && (
+        <div className="relative z-10 flex flex-col items-center justify-center p-4 text-center">
           <div className="mb-2 flex items-center gap-2 bg-indigo-500/20 backdrop-blur-md px-5 py-2 rounded-full border border-indigo-500/40 text-indigo-200 shadow-2xl max-w-xl">
             <Wifi className="w-4 h-4 text-cyan-300" />
             <span className="text-xs font-semibold tracking-wide">
               Live AI Counselor Stream Connected
             </span>
           </div>
-        )}
+        </div>
+      )}
 
-        {counselorState === 'thinking' && (
-          <div className="flex items-center gap-2 bg-amber-500/20 backdrop-blur-md px-5 py-2 rounded-full border border-amber-500/40 text-amber-300 shadow-2xl animate-pulse">
-            <Sparkles className="w-4 h-4 animate-spin text-amber-400" />
-            <span className="text-xs font-bold tracking-wider uppercase">Preparing Answer...</span>
-          </div>
-        )}
-      </div>
-
-      {/* BOTTOM CENTER MIC & AUDIO VISUALIZER CAPSULE */}
-      <div className="relative z-10 p-6 flex flex-col items-center justify-center">
+      {/* BOTTOM CONTROLS: Center Mic & Audio Visualizer Capsule + Right Circular End Button */}
+      <div className="relative z-10 px-6 pb-6 pt-2 w-full flex flex-col items-center justify-center">
         
-        {!counselingInitiated ? (
-          // PRE-COUNSELING STATE: Intro is playing OR waiting for user to click "Initiate Counseling"
-          <div className="flex flex-col items-center gap-3">
-            {!introCompleted ? (
-              // Intro is currently playing
-              <div className="flex items-center gap-4 bg-slate-950/85 backdrop-blur-xl px-7 py-3.5 rounded-full border border-cyan-500/30 shadow-[0_0_40px_rgba(6,182,212,0.25)]">
-                <div className="flex items-center gap-1.5 h-6">
-                  <span className="w-1 bg-cyan-400 rounded-full h-3 animate-pulse" />
-                  <span className="w-1 bg-cyan-400 rounded-full h-6 animate-bounce" />
-                  <span className="w-1 bg-cyan-400 rounded-full h-4 animate-pulse" />
-                  <span className="w-1 bg-cyan-400 rounded-full h-6 animate-bounce" />
-                  <span className="w-1 bg-cyan-400 rounded-full h-2 animate-pulse" />
+        {/* Main Controls Row with Centered Action and Right-Aligned Circular End Button */}
+        <div className="relative w-full flex items-center justify-center min-h-[56px]">
+          
+          {!counselingInitiated ? (
+            // PRE-COUNSELING STATE: Intro is playing OR waiting for user to click "Initiate Counseling"
+            <div className="flex flex-col items-center gap-3">
+              {!introCompleted ? (
+                // Intro is currently playing
+                <div className="flex items-center gap-4 bg-slate-950/85 backdrop-blur-xl px-7 py-3.5 rounded-full border border-cyan-500/30 shadow-[0_0_40px_rgba(6,182,212,0.25)]">
+                  <div className="flex items-center gap-1.5 h-6">
+                    <span className="w-1 bg-cyan-400 rounded-full h-3 animate-pulse" />
+                    <span className="w-1 bg-cyan-400 rounded-full h-6 animate-bounce" />
+                    <span className="w-1 bg-cyan-400 rounded-full h-4 animate-pulse" />
+                    <span className="w-1 bg-cyan-400 rounded-full h-6 animate-bounce" />
+                    <span className="w-1 bg-cyan-400 rounded-full h-2 animate-pulse" />
+                  </div>
+                  <span className="text-xs font-semibold text-cyan-200 tracking-wide flex items-center gap-2">
+                    <Volume2 className="w-4 h-4 text-cyan-400 animate-pulse" />
+                    Priya Sharma is giving introduction...
+                  </span>
+                  <div className="flex items-center gap-1.5 h-6">
+                    <span className="w-1 bg-cyan-400 rounded-full h-2 animate-pulse" />
+                    <span className="w-1 bg-cyan-400 rounded-full h-5 animate-bounce" />
+                    <span className="w-1 bg-cyan-400 rounded-full h-3 animate-pulse" />
+                    <span className="w-1 bg-cyan-400 rounded-full h-6 animate-bounce" />
+                    <span className="w-1 bg-cyan-400 rounded-full h-3 animate-pulse" />
+                  </div>
                 </div>
-                <span className="text-xs font-semibold text-cyan-200 tracking-wide flex items-center gap-2">
-                  <Volume2 className="w-4 h-4 text-cyan-400 animate-pulse" />
-                  Priya Sharma is giving introduction...
-                </span>
-                <div className="flex items-center gap-1.5 h-6">
-                  <span className="w-1 bg-cyan-400 rounded-full h-2 animate-pulse" />
-                  <span className="w-1 bg-cyan-400 rounded-full h-5 animate-bounce" />
-                  <span className="w-1 bg-cyan-400 rounded-full h-3 animate-pulse" />
-                  <span className="w-1 bg-cyan-400 rounded-full h-6 animate-bounce" />
-                  <span className="w-1 bg-cyan-400 rounded-full h-3 animate-pulse" />
-                </div>
-              </div>
-            ) : (
-              // Intro has completed: Show "Initiate Counseling" Button!
-              <button
-                type="button"
-                onClick={handleInitiateCounseling}
-                className="flex items-center gap-3 px-8 py-3.5 rounded-full bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white font-bold text-sm shadow-[0_0_50px_rgba(6,182,212,0.6)] hover:scale-105 transition-all duration-300 ring-4 ring-cyan-400/40 animate-pulse cursor-pointer"
-              >
-                <Sparkles className="w-5 h-5 text-cyan-200 animate-spin" />
-                <span className="tracking-wide text-sm font-extrabold uppercase">Initiate Counseling</span>
-              </button>
-            )}
-
-            <p className="text-xs font-semibold tracking-wider text-cyan-300 uppercase bg-slate-950/80 px-4 py-1 rounded-full border border-cyan-500/20 backdrop-blur-md">
-              {!introCompleted
-                ? '● Please listen to the introduction...'
-                : '● Introduction Complete — Click "Initiate Counseling" to speak'}
-            </p>
-          </div>
-        ) : (
-          // CONTINUOUS HANDS-FREE FULL-DUPLEX MODE ACTIVE!
-          <div className="flex flex-col items-center gap-3">
+              ) : (
+                // Intro has completed: Show "Initiate Counseling" Button!
+                <button
+                  type="button"
+                  onClick={handleInitiateCounseling}
+                  className="flex items-center gap-3 px-8 py-3.5 rounded-full bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white font-bold text-sm shadow-[0_0_50px_rgba(6,182,212,0.6)] hover:scale-105 transition-all duration-300 ring-4 ring-cyan-400/40 animate-pulse cursor-pointer"
+                >
+                  <Sparkles className="w-5 h-5 text-cyan-200 animate-spin" />
+                  <span className="tracking-wide text-sm font-extrabold uppercase">Initiate Counseling</span>
+                </button>
+              )}
+            </div>
+          ) : (
+            // CONTINUOUS HANDS-FREE FULL-DUPLEX MODE ACTIVE!
             <div className={`flex items-center gap-6 bg-slate-950/85 backdrop-blur-xl px-8 py-3 rounded-full border transition-all duration-300 shadow-2xl ${
               isUserSpeaking
                 ? 'border-emerald-500/50 shadow-[0_0_40px_rgba(16,185,129,0.3)] ring-2 ring-emerald-500/20'
@@ -508,13 +472,13 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
                 }`}
                 title={
                   counselorState === 'speaking'
-                    ? 'Priya Sharma is speaking (Speak to interrupt)'
+                    ? 'Priya Mam Speaking'
                     : counselorState === 'thinking'
                     ? 'Preparing your answer...'
                     : isUserSpeaking
-                    ? 'Listening to you speak'
+                    ? 'Listening'
                     : isMicActive
-                    ? 'Mic is live listening (Click to mute)'
+                    ? 'Speak'
                     : 'Mic is muted (Click to unmute)'
                 }
               >
@@ -590,10 +554,33 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
                 }`} />
               </div>
             </div>
+          )}
 
-            {/* Live Status Text underneath capsule */}
+          {/* Right Circular End Button: Shifted to bottom right parallel to the mic */}
+          <div className="absolute right-0 flex items-center">
+            <button
+              type="button"
+              onClick={handleEndSessionClick}
+              className="w-14 h-14 rounded-full bg-[#E11D48] hover:bg-[#F43F5E] text-white flex flex-col items-center justify-center shadow-[0_0_25px_rgba(225,29,72,0.5)] hover:scale-105 active:scale-95 transition-all duration-200 border-2 border-rose-400/30 cursor-pointer"
+              title="End"
+            >
+              <PhoneOff className="w-4 h-4 text-white mb-0.5" />
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-white">End</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Live Status Text underneath */}
+        <div className="mt-3 flex items-center justify-center">
+          {!counselingInitiated ? (
+            <p className="text-xs font-semibold tracking-wider text-cyan-300 uppercase bg-slate-950/80 px-4 py-1.5 rounded-full border border-cyan-500/20 backdrop-blur-md">
+              {!introCompleted
+                ? '● Please listen to the introduction...'
+                : '● Introduction Complete — Click "Initiate Counseling" to speak'}
+            </p>
+          ) : (
             <p
-              className={`text-xs font-semibold tracking-wider uppercase px-4 py-1.5 rounded-full backdrop-blur-md transition-all duration-300 ${
+              className={`text-xs font-semibold tracking-wide px-4 py-1.5 rounded-full backdrop-blur-md transition-all duration-300 flex items-center gap-2 ${
                 counselorState === 'speaking'
                   ? 'text-cyan-300 bg-cyan-950/80 border border-cyan-500/30 shadow-[0_0_20px_rgba(6,182,212,0.2)]'
                   : counselorState === 'thinking'
@@ -605,18 +592,31 @@ export const HeyGenStreamingAvatar: React.FC<StreamingAvatarProps> = ({
                   : 'text-rose-300 bg-rose-950/80 border border-rose-500/30'
               }`}
             >
-              {counselorState === 'speaking'
-                ? '● Priya Sharma Speaking... (Speak to interrupt)'
-                : counselorState === 'thinking'
-                ? '● Preparing your answer...'
-                : isUserSpeaking
-                ? '● Listening to you... Speak naturally'
-                : isMicActive
-                ? '● Continuous Live Mic Active — Speak anytime'
-                : '● Mic Muted (Click to resume)'}
+              <span className={`w-2 h-2 rounded-full shrink-0 ${
+                counselorState === 'speaking'
+                  ? 'bg-cyan-400 animate-pulse'
+                  : counselorState === 'thinking'
+                  ? 'bg-amber-400 animate-spin'
+                  : isUserSpeaking
+                  ? 'bg-emerald-400 animate-ping'
+                  : isMicActive
+                  ? 'bg-cyan-400 animate-pulse'
+                  : 'bg-rose-500'
+              }`} />
+              <span>
+                {counselorState === 'speaking'
+                  ? 'Priya Mam Speaking'
+                  : counselorState === 'thinking'
+                  ? 'Preparing Answer...'
+                  : isUserSpeaking
+                  ? 'Listening'
+                  : isMicActive
+                  ? 'Speak'
+                  : 'Mic Muted'}
+              </span>
             </p>
-          </div>
-        )}
+          )}
+        </div>
 
       </div>
 

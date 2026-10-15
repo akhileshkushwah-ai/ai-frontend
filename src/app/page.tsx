@@ -32,7 +32,7 @@ export default function Dashboard() {
           setSessionId(data.sessionId);
           const name = data.reportLoaded?.studentName || 'Aman Verma';
           setStudentName(name);
-          const welcomeText = `Namaste ${name}! Main Priya Sharma, aapki SABCQ Career Counselor hoon. Aapki report mere paas hai. Aap bina kisi jhijhak ke mujhse apne career options ke baare mein baat kar sakte hain!`;
+          const welcomeText = `Namaste ${name}! Main Priya Sharma, aapki सब सी क्यू (SABCQ) Career Counselor hoon. Aapki report mere paas hai. Aap bina kisi jhijhak ke mujhse apne career options ke baare mein baat kar sakte hain!`;
           setLastResponseText(welcomeText);
         }
       })
@@ -52,71 +52,6 @@ export default function Dashboard() {
       try { window.speechSynthesis.cancel(); } catch (_) {}
     }
     setIsCallActive(true);
-    setCounselorState('idle');
-  };
-
-  const handleSendMessage = async (userMessage: string) => {
-    if (!sessionId) {
-      await startCounselorSession();
-      return;
-    }
-
-    setIsLoading(true);
-    setCounselorState('thinking');
-
-    try {
-      const res = await fetch(`${API_BASE_URL}/voice-chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: sessionId,
-          message: userMessage,
-        }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        setLastResponseText(data.responseText);
-
-        if (data.audioBase64) {
-          const audioSrc = `data:${data.mimeType || 'audio/mp3'};base64,${data.audioBase64}`;
-          const audio = new Audio(audioSrc);
-          setCounselorState('speaking');
-
-          audio.onended = () => setCounselorState('idle');
-          audio.onerror = () => {
-            setCounselorState('idle');
-            speakText(data.responseText);
-          };
-
-          const playPromise = audio.play();
-          if (playPromise !== undefined) {
-            playPromise.catch(() => {
-              setCounselorState('idle');
-              speakText(data.responseText);
-            });
-          }
-        } else {
-          speakText(data.responseText);
-        }
-      } else {
-        setCounselorState('idle');
-      }
-    } catch (err) {
-      console.error('Voice chat error:', err);
-      setCounselorState('idle');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // High quality Speech Synthesis for clear Hindi/Hinglish pronunciation
-  // Disabled browser speechSynthesis to prevent duplicate system voice overlap.
-  // Audio is handled 100% natively by Gemini Live WebSocket / Studio TTS Audio MP3.
-  const speakText = (text: string) => {
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      try { window.speechSynthesis.cancel(); } catch (_) {}
-    }
     setCounselorState('idle');
   };
 
@@ -166,7 +101,6 @@ export default function Dashboard() {
           <HeyGenStreamingAvatar
             counselorState={counselorState}
             responseText={lastResponseText}
-            onSendMessage={handleSendMessage}
             isLoading={isLoading}
             onEndSession={handleEndSession}
             studentName={studentName}
@@ -200,15 +134,15 @@ export default function Dashboard() {
               <div className="space-y-4">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-semibold">
                   <Sparkles className="w-3.5 h-3.5" />
-                  <span>Real-time Interactive AI Counselor</span>
+                  <span>Talk Live with Your AI Mentor.</span>
                 </div>
                 
                 <h2 className="text-2xl font-extrabold text-white tracking-tight leading-snug">
-                  Welcome, {studentName}!
+                  Hi {studentName ? (studentName.split(' ')[0].charAt(0).toUpperCase() + studentName.split(' ')[0].slice(1).toLowerCase()) : 'Aman'}! Let's Plan Your Future Together.
                 </h2>
                 
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  Connect with your AI Career Counselor for real-time video & voice guidance based on your SABCQ assessment report.
+                  Talk live with Priya mam, your AI guide! Get instant voice and video advice based on your report to discover your strengths and future path.
                 </p>
 
               </div>
@@ -227,7 +161,7 @@ export default function Dashboard() {
                 ) : (
                   <>
                     <Play className="w-5 h-5 fill-white" />
-                    <span>Start Session</span>
+                    <span>Start Now</span>
                   </>
                 )}
               </button>

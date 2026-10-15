@@ -9,6 +9,21 @@ interface GatewayEvent {
   text?: string;
   message?: string;
   mimeType?: string;
+  phaseNumber?: number;
+  phaseName?: string;
+  milestoneId?: string;
+  milestoneName?: string;
+  milestonePart?: string;
+  targetDuration?: string;
+}
+
+export interface PhaseInfo {
+  phaseNumber: number;
+  phaseName: string;
+  milestoneId?: string;
+  milestoneName?: string;
+  milestonePart?: string;
+  targetDuration?: string;
 }
 
 export type CounselorState = 'idle' | 'thinking' | 'speaking';
@@ -40,10 +55,16 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
   const [isUserSpeaking, setIsUserSpeaking] = useState(false);
   const isUserSpeakingRef = useRef(false);
   const userSpeechFramesRef = useRef(0);
+  const bargeInFramesRef = useRef(0);
   const userSilenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [isFallbackMode, setIsFallbackMode] = useState(false);
   const [counselorState, setCounselorState] = useState<CounselorState>('idle');
   const counselorStateRef = useRef<CounselorState>('idle');
+  const [currentPhaseInfo, setCurrentPhaseInfo] = useState<PhaseInfo>({
+    phaseNumber: 1,
+    phaseName: 'Introduction & Counseling Setup',
+    milestoneName: 'Welcome & Introduction',
+  });
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -113,15 +134,21 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
       clearTimeout(idleDebounceTimerRef.current);
       idleDebounceTimerRef.current = null;
     }
-    audioQueueRef.current.forEach((source) => {
+    bargeInFramesRef.current = 0;
+    const currentQueue = audioQueueRef.current;
+    audioQueueRef.current = [];
+    nextStartTimeRef.current = 0;
+    chunkCountRef.current = 0;
+
+    // Detach onended before stopping to prevent 880x spurious callback loops
+    currentQueue.forEach((source) => {
       try {
+        source.onended = null;
         source.stop();
         source.disconnect();
       } catch (_) {}
     });
-    audioQueueRef.current = [];
-    nextStartTimeRef.current = 0;
-    chunkCountRef.current = 0;
+
     counselorStateRef.current = 'idle';
     setCounselorState('idle');
     optionsRef.current.onStateChange?.('idle');
@@ -159,6 +186,7 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
           setIsUserSpeaking(false);
         }
         userSpeechFramesRef.current = 0;
+        bargeInFramesRef.current = 0;
 
         // Convert Base64 binary string to 16-bit Little-Endian Float32 PCM samples
         const binaryString = atob(base64Data);
@@ -311,9 +339,18 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
             break;
           case 'turn_complete':
             // Gemini finished producing tokens on the backend.
-            // NEVER stop already-scheduled audio here! Let all queued chunks play to the end.
+            if (parsed.phaseNumber && parsed.phaseName) {
+              setCurrentPhaseInfo({
+                phaseNumber: parsed.phaseNumber,
+                phaseName: parsed.phaseName,
+                milestoneId: parsed.milestoneId,
+                milestoneName: parsed.milestoneName,
+                milestonePart: parsed.milestonePart,
+                targetDuration: parsed.targetDuration,
+              });
+            }
             console.log(
-              `[Gemini Live] turn_complete received. Letting remaining ${audioQueueRef.current.length} queued chunks finish naturally.`,
+              `[Gemini Live] turn_complete received. Phase ${parsed.phaseNumber || 1}: ${parsed.milestoneName || 'In progress'}`,
             );
             break;
           case 'live_ws_closed':
@@ -415,36 +452,54 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
         }
         const rms = Math.sqrt(sumSquares / inputBuffer.length);
 
-        // Intelligent Echo Shield & Barge-In Detection:
+        // Intelligent Echo Shield & Sustained Barge-In Detection:
         // When AI is actively speaking:
         if (counselorStateRef.current === 'speaking') {
-          // If volume is low (RMS < 0.04), it is speaker leakage / room ambience.
-          // Drop it completely so Gemini NEVER hears its own output voice!
-          if (rms < 0.04) {
-            return;
-          }
-          // If RMS >= 0.04, the student is intentionally speaking into the mic to interrupt!
-          console.log('[Gemini Live] Student Barge-In detected (RMS:', rms.toFixed(3), '). Stopping AI speech.');
-          stopAudioPlayback();
-          safeSend({ event: 'interrupt' });
+          // Barge-in requires INTENTIONAL, SUSTAINED spoken volume into the headset microphone.
+          // Single instantaneous spikes (coughs, breaths, chair squeaks, cable friction) are < 200ms and get rejected!
+          const BARGE_IN_RMS_THRESHOLD = 0.075;
+          const REQUIRED_BARGE_IN_FRAMES = 4; // ~340ms of continuous human voice required to interrupt
 
-          if (userSilenceTimerRef.current) {
-            clearTimeout(userSilenceTimerRef.current);
-            userSilenceTimerRef.current = null;
+          if (rms >= BARGE_IN_RMS_THRESHOLD) {
+            bargeInFramesRef.current += 1;
+            if (bargeInFramesRef.current >= REQUIRED_BARGE_IN_FRAMES) {
+              console.log(
+                '[Gemini Live] Intentional Student Barge-In confirmed (Sustained RMS:',
+                rms.toFixed(3),
+                '). Stopping AI speech.',
+              );
+              bargeInFramesRef.current = 0;
+              stopAudioPlayback();
+              safeSend({ event: 'interrupt' });
+
+              if (userSilenceTimerRef.current) {
+                clearTimeout(userSilenceTimerRef.current);
+                userSilenceTimerRef.current = null;
+              }
+              userSpeechFramesRef.current = 4;
+              isUserSpeakingRef.current = true;
+              setIsUserSpeaking(true);
+            }
+          } else {
+            bargeInFramesRef.current = Math.max(0, bargeInFramesRef.current - 1);
           }
-          userSpeechFramesRef.current = 2;
-          isUserSpeakingRef.current = true;
-          setIsUserSpeaking(true);
+
+          // Crucial: Shield Gemini while AI is speaking! Never stream transient mic noise into Gemini's ear.
+          return;
         } else {
           // AI is NOT speaking: detect student speech activity
-          const SPEECH_THRESHOLD = 0.024;
+          // Tuned parameters: 0.045 RMS threshold, 4 consecutive frames (~340ms), 900ms silence timeout
+          const SPEECH_THRESHOLD = 0.045;
+          const REQUIRED_SPEECH_FRAMES = 4;
+          const SILENCE_TIMEOUT_MS = 900;
+
           if (rms >= SPEECH_THRESHOLD) {
             userSpeechFramesRef.current += 1;
             if (userSilenceTimerRef.current) {
               clearTimeout(userSilenceTimerRef.current);
               userSilenceTimerRef.current = null;
             }
-            if (userSpeechFramesRef.current >= 2 && !isUserSpeakingRef.current) {
+            if (userSpeechFramesRef.current >= REQUIRED_SPEECH_FRAMES && !isUserSpeakingRef.current) {
               isUserSpeakingRef.current = true;
               setIsUserSpeaking(true);
               if (counselorStateRef.current === 'thinking') {
@@ -463,7 +518,7 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
                 if (counselorStateRef.current !== 'speaking') {
                   updateState('thinking');
                 }
-              }, 550);
+              }, SILENCE_TIMEOUT_MS);
             }
           }
         }
@@ -582,5 +637,6 @@ export function useGeminiLiveVoice(options: UseGeminiLiveVoiceOptions = {}) {
     interruptAi,
     sendLiveText,
     triggerFirstIntro,
+    currentPhaseInfo,
   };
 }
